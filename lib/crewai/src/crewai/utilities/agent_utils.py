@@ -335,6 +335,9 @@ def format_message_for_llm(
 def format_answer(answer: str) -> AgentAction | AgentFinish:
     """Format a response from the LLM into an AgentAction or AgentFinish.
 
+    Updated to support flexible parsing without logging warnings when
+    flexible mode succeeds. Only returns error finish when all parsing fails.
+
     Args:
         answer: The raw response from the LLM
 
@@ -344,6 +347,8 @@ def format_answer(answer: str) -> AgentAction | AgentFinish:
     try:
         return parse(answer)
     except Exception:
+        # parse() already tried both strict and flexible modes
+        # Only fail if both modes failed
         return AgentFinish(
             thought="Failed to parse LLM response",
             output=answer,

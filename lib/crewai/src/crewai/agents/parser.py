@@ -3,9 +3,13 @@
 This module provides parsing functionality for agent outputs that follow
 the ReAct (Reasoning and Acting) format, converting them into structured
 AgentAction or AgentFinish objects.
+
+Updated to support flexible parsing for Ollama and other models that
+don't strictly follow the Thought/Action/Action Input format.
 """
 
 from dataclasses import dataclass
+import re
 
 from json_repair import repair_json  # type: ignore[import-untyped]
 from pydantic import BaseModel
@@ -81,6 +85,9 @@ def parse(text: str) -> AgentAction | AgentFinish:
 
     Thought: agent thought here
     Final Answer: The temperature is 100 degrees
+    
+    FLEXIBLE MODE (NEW): If strict parsing fails, attempts flexible parsing
+    for models (like Ollama) that may not follow the exact format.
 
     Args:
         text: The agent output text to parse.
@@ -88,6 +95,30 @@ def parse(text: str) -> AgentAction | AgentFinish:
     Returns:
         AgentAction or AgentFinish based on the content.
 
+    Raises:
+        OutputParserError: If the text format is invalid even after flexible parsing.
+    """
+    # Try strict parsing first
+    try:
+        return _parse_strict(text)
+    except OutputParserError:
+        # Fall back to flexible parsing for Ollama and similar models
+        try:
+            return _parse_flexible(text)
+        except Exception:
+            # If flexible parsing also fails, re-raise the original error
+            raise
+
+
+def _parse_strict(text: str) -> AgentAction | AgentFinish:
+    """Strict ReAct format parser (original CrewAI logic).
+    
+    Args:
+        text: The agent output text to parse.
+        
+    Returns:
+        AgentAction or AgentFinish based on the content.
+        
     Raises:
         OutputParserError: If the text format is invalid.
     """
@@ -131,6 +162,78 @@ def parse(text: str) -> AgentAction | AgentFinish:
     error = f"{err_format}"
     raise OutputParserError(
         error,
+    )
+
+
+def _parse_flexible(text: str) -> AgentAction | AgentFinish:
+    """Flexible parser for models that don't strictly follow ReAct format.
+    
+    This parser tries to extract actions and answers from more natural language
+    responses, which is common with Ollama models like minimax, glm-5, etc.
+    
+    Args:
+        text: The agent output text to parse.
+        
+    Returns:
+        AgentAction or AgentFinish based on the content.
+        
+    Raises:
+        OutputParserError: If no actionable content can be extracted.
+    """
+    # Look for common patterns indicating a final answer
+    final_answer_patterns = [
+        r"(?:final answer|answer|conclusion|result):\s*(.+)",
+        r"(?:here is|here's|the answer is)\s+(.+)",
+        r"^(?:therefore|thus|so),?\s+(.+)",
+    ]
+    
+    for pattern in final_answer_patterns:
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match:
+            answer = match.group(1).strip()
+            thought = text[:match.start()].strip() or "Determined answer from context"
+            return AgentFinish(thought=thought, output=answer, text=text)
+    
+    # Look for tool usage in natural language
+    tool_patterns = [
+        # "use <tool> with <input>" or "call <tool>(<input>)"
+        r"(?:use|call|invoke|run)\s+(\w+)\s+(?:with|using)?\s*[:\(]?\s*(.+?)[\)\.]?$",
+        # "I will/should <tool> <input>"
+        r"I (?:will|should|need to)\s+(\w+)\s+(.+?)[\.\n]",
+        # "<tool>: <input>"
+        r"(\w+):\s*(.+?)$",
+    ]
+    
+    for pattern in tool_patterns:
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if match:
+            tool_name = match.group(1).strip()
+            tool_input = match.group(2).strip()
+            thought = text[:match.start()].strip() or f"Planning to use {tool_name}"
+            
+            # Clean up tool input (remove quotes, etc.)
+            tool_input = tool_input.strip(' "\')
+            safe_tool_input = _safe_repair_json(tool_input)
+            
+            return AgentAction(
+                thought=thought,
+                tool=tool_name,
+                tool_input=safe_tool_input,
+                text=text
+            )
+    
+    # If text is reasonably long and coherent, treat as final answer
+    if len(text.strip()) > 20 and not text.strip().lower().startswith("error"):
+        return AgentFinish(
+            thought="Generated response without explicit format markers",
+            output=text.strip(),
+            text=text
+        )
+    
+    # Unable to parse
+    raise OutputParserError(
+        "Could not parse response in either strict or flexible mode. "
+        "Expected 'Final Answer:' or 'Action:' patterns, or natural language tool usage."
     )
 
 
