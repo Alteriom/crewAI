@@ -200,7 +200,6 @@ def _parse_flexible(text: str) -> AgentAction | AgentFinish:
         r"(?:use|call|invoke|run)\s+(\w+)\s+(?:with|using)?\s*[:\(]?\s*(.+?)[\)\.]?$",
         # "I will/should <tool> <input>"
         r"I (?:will|should|need to)\s+(\w+)\s+(.+?)[\.\n]",
-        # "<tool>: <input>"
         r"(\w+):\s*(.+?)$",
     ]
     
