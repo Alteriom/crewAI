@@ -212,7 +212,7 @@ def _parse_flexible(text: str) -> AgentAction | AgentFinish:
             thought = text[:match.start()].strip() or f"Planning to use {tool_name}"
             
             # Clean up tool input (remove quotes, etc.)
-            tool_input = tool_input.strip(' "\')
+            tool_input = tool_input.strip(' "\'')
             safe_tool_input = _safe_repair_json(tool_input)
             
             return AgentAction(
